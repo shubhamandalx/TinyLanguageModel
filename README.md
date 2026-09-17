@@ -1,4 +1,4 @@
-# Modern Mini LLM
+# TinyLanguageModel
 
 A small decoder-only Transformer language model implemented from
 scratch in PyTorch and trained using a custom pretraining
