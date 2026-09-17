@@ -1,3 +1,23 @@
+"""
+model.py
+========
+
+Complete Modern Mini LLM architecture in a single file, in
+top-to-bottom order:
+
+    1. RMSNorm
+    2. Rotary Positional Embeddings (RoPE) + apply_rope helper
+    3. Grouped Query Attention (GQA)
+    4. SwiGLU expert
+    5. Mixture of Experts (MoE) with top-k routing
+    6. Transformer block
+    7. ModernGPT (the full model)
+    8. Parameter-count utilities
+
+Every class here is a standard `nn.Module`; the only thing tying
+them together is `GPTConfig` (see config.py).
+"""
+
 from typing import Tuple
 
 import torch
@@ -8,9 +28,25 @@ from torch import Tensor
 from config import GPTConfig
 
 
+# ====================================================================
+# 1. RMSNorm
+# ====================================================================
+
 
 class RMSNorm(nn.Module):
-    
+    """
+    Root Mean Square Normalization — a common, cheaper replacement
+    for LayerNorm in modern LLMs.
+
+    LayerNorm normalizes using mean + variance. RMSNorm normalizes
+    using only the root mean square:
+
+        x / RMS(x)
+
+    followed by a learned per-dimension scale. The normalization
+    itself is computed in float32 for numerical stability, even
+    when the model runs in fp16.
+    """
 
     def __init__(self, dim: int, eps: float = 1e-6) -> None:
         super().__init__()
@@ -27,9 +63,20 @@ class RMSNorm(nn.Module):
         return x_float.to(original_dtype) * self.weight
 
 
+# ====================================================================
+# 2. Rotary Positional Embeddings (RoPE)
+# ====================================================================
+
 
 class RotaryEmbedding(nn.Module):
-    
+    """
+    Precomputes sin/cos rotation caches for a given head dimension
+    and maximum sequence length.
+
+    RoPE encodes token position by rotating the query and key
+    vectors, rather than adding a separate learned positional
+    embedding — this is the approach used by LLaMA-family models.
+    """
 
     def __init__(self, head_dim: int, max_seq_len: int, theta: float = 10000.0) -> None:
         super().__init__()
@@ -48,7 +95,9 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("sin_cache", freqs.sin(), persistent=False)
 
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
-        
+        """
+        x shape: [batch, heads, sequence, head_dim]
+        """
 
         seq_len = x.size(-2)
 
@@ -59,7 +108,11 @@ class RotaryEmbedding(nn.Module):
 
 
 def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
-   
+    """
+    Apply the rotary transformation to `x` by splitting its final
+    dimension into even/odd pairs and performing a 2D rotation on
+    each pair, then interleaving the results back together.
+    """
 
     x_even = x[..., 0::2]
     x_odd = x[..., 1::2]
@@ -72,10 +125,21 @@ def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
     return x_out.flatten(-2)
 
 
+# ====================================================================
+# 3. Grouped Query Attention (GQA)
+# ====================================================================
 
 
 class GroupedQueryAttention(nn.Module):
-   
+    """
+    Grouped Query Attention: many query heads share a smaller
+    number of key/value heads.
+
+    Example: 6 query heads, 2 KV heads -> every KV head is shared
+    by 3 query heads. This shrinks the KV cache during inference
+    compared to standard multi-head attention, where Q/K/V head
+    counts are all equal.
+    """
 
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
@@ -91,7 +155,7 @@ class GroupedQueryAttention(nn.Module):
 
         self.q_proj = nn.Linear(config.d_model, config.n_heads * self.head_dim, bias=False)
 
-       
+        # NOTE: only n_kv_heads instead of n_heads — this is the GQA saving.
         self.k_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(config.d_model, config.n_kv_heads * self.head_dim, bias=False)
 
@@ -102,7 +166,9 @@ class GroupedQueryAttention(nn.Module):
         self.dropout = config.dropout
 
     def forward(self, x: Tensor) -> Tensor:
-        
+        """
+        x: [batch, sequence, d_model]
+        """
 
         B, T, C = x.shape
 
@@ -110,7 +176,7 @@ class GroupedQueryAttention(nn.Module):
         k = self.k_proj(x)
         v = self.v_proj(x)
 
-        
+        # [B, T, C] -> [B, heads, T, head_dim]
         q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         k = k.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
@@ -119,6 +185,8 @@ class GroupedQueryAttention(nn.Module):
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
+        # Repeat each KV head so it lines up with its group of Q heads.
+        # e.g. K0 K1 -> K0 K0 K0 K1 K1 K1
         k = k.repeat_interleave(self.num_query_groups, dim=1)
         v = v.repeat_interleave(self.num_query_groups, dim=1)
 
@@ -133,10 +201,19 @@ class GroupedQueryAttention(nn.Module):
         return self.o_proj(y)
 
 
+# ====================================================================
+# 4. SwiGLU expert
+# ====================================================================
 
 
 class SwiGLUExpert(nn.Module):
-   
+    """
+    One feed-forward expert using the SwiGLU activation:
+
+        SiLU(gate(x)) * up(x)  ->  down projection
+
+    This is the feed-forward design used by LLaMA-family models.
+    """
 
     def __init__(self, d_model: int, hidden_dim: int) -> None:
         super().__init__()
@@ -151,10 +228,24 @@ class SwiGLUExpert(nn.Module):
         return self.down(gate * up)
 
 
+# ====================================================================
+# 5. Mixture of Experts (MoE)
+# ====================================================================
+
 
 class MixtureOfExperts(nn.Module):
+    """
+    Sparse Mixture of Experts feed-forward layer.
 
-    
+    A learned router assigns each token to its top-k experts (out
+    of n_experts total). Only the selected experts run for each
+    token, so total parameter count can be large while the active
+    compute per token stays small.
+
+    Also returns an auxiliary load-balancing loss: without it, the
+    router can collapse to routing almost everything to a single
+    "good" expert.
+    """
 
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
@@ -172,7 +263,11 @@ class MixtureOfExperts(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
-        
+        """
+        x: [B, T, D]
+
+        Returns: (output [B, T, D], aux_loss [scalar])
+        """
 
         B, T, D = x.shape
 
@@ -181,7 +276,8 @@ class MixtureOfExperts(nn.Module):
 
         topk_probs, topk_indices = torch.topk(router_probs, k=self.top_k, dim=-1)
 
-       
+        # Normalize only the selected experts' probabilities so
+        # they sum to 1 for each token.
         topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
 
         flat_x = x.reshape(-1, D)
@@ -190,7 +286,8 @@ class MixtureOfExperts(nn.Module):
 
         output = torch.zeros_like(flat_x)
 
-        
+        # Educational routing loop. Production MoE implementations
+        # use highly optimized batched routing kernels instead.
         for expert_id, expert in enumerate(self.experts):
 
             token_positions, topk_position = torch.where(flat_indices == expert_id)
@@ -204,10 +301,11 @@ class MixtureOfExperts(nn.Module):
             routing_weight = flat_probs[token_positions, topk_position].unsqueeze(-1)
             expert_output = expert_output * routing_weight
 
-            
+            # A token can be routed to more than one expert;
+            # index_add_ accumulates their weighted contributions.
             output.index_add_(0, token_positions, expert_output)
 
-        
+        # --- Auxiliary load-balancing loss -----------------------------
         importance = router_probs.mean(dim=(0, 1))
         load = F.one_hot(topk_indices, num_classes=self.n_experts).float().mean(dim=(0, 1))
         aux_loss = self.n_experts * torch.sum(importance * load)
@@ -215,10 +313,18 @@ class MixtureOfExperts(nn.Module):
         return output.view(B, T, D), aux_loss
 
 
+# ====================================================================
+# 6. Transformer block
+# ====================================================================
 
 
 class TransformerBlock(nn.Module):
-  
+    """
+    One decoder block using the modern pre-norm structure:
+
+        x -> RMSNorm -> Attention -> (+ residual)
+          -> RMSNorm -> MoE       -> (+ residual)
+    """
 
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
@@ -238,9 +344,18 @@ class TransformerBlock(nn.Module):
         return x, aux_loss
 
 
+# ====================================================================
+# 7. ModernGPT — the complete model
+# ====================================================================
+
 
 class ModernGPT(nn.Module):
-   
+    """
+    Complete decoder-only Transformer language model.
+
+        token IDs -> Embedding -> N x TransformerBlock -> RMSNorm
+        -> LM Head (tied to the embedding) -> logits over vocab
+    """
 
     def __init__(self, config: GPTConfig, vocab_size: int) -> None:
         super().__init__()
@@ -258,7 +373,8 @@ class ModernGPT(nn.Module):
 
         self.lm_head = nn.Linear(config.d_model, vocab_size, bias=False)
 
-        
+        # Weight tying: reuse the embedding matrix as the output
+        # projection instead of learning a second copy of it.
         self.lm_head.weight = self.token_embedding.weight
 
         self.apply(self._init_weights)
@@ -273,7 +389,11 @@ class ModernGPT(nn.Module):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, input_ids: Tensor) -> Tuple[Tensor, Tensor]:
-      
+        """
+        input_ids: [B, T]
+
+        Returns: (logits [B, T, vocab_size], total_aux_loss [scalar])
+        """
 
         x = self.token_embedding(input_ids)
 
@@ -289,9 +409,15 @@ class ModernGPT(nn.Module):
         return logits, total_aux_loss
 
 
+# ====================================================================
+# 8. Parameter-count utilities
+# ====================================================================
+
 
 def count_parameters(model: ModernGPT) -> int:
-   
+    """
+    Print and return the total number of trainable parameters.
+    """
 
     total = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -302,7 +428,10 @@ def count_parameters(model: ModernGPT) -> int:
 
 
 def print_parameter_breakdown(model: ModernGPT) -> None:
-    
+    """
+    Print parameter counts grouped by major architectural
+    component (embedding, attention, MoE, norms).
+    """
 
     groups = {
         "Token Embedding": model.token_embedding,
