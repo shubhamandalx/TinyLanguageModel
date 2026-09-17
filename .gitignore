@@ -27,9 +27,7 @@ Thumbs.db
 # Logs
 *.log
 
-# Training data (do not commit large corpora)
-data/*
-!data/README.md
+
 
 # Checkpoints / model weights (do not commit large binaries)
 checkpoints/*

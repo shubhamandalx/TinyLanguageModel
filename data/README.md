@@ -16,5 +16,4 @@ tokens that came before it.
 No other preprocessing is required — tokenization happens
 automatically via `tiktoken` when `train.py` runs.
 
-The dataset itself is not included in this repository and is not
-meant to be committed to Git (see `.gitignore`).
+Here i have TinyStories Validation file for demo purposes.
