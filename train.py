@@ -1,28 +1,3 @@
-"""
-train.py
-========
-
-Entry point that orchestrates a full pretraining run, start to
-finish. This file intentionally contains no model or training-loop
-implementation details — just the sequence of steps:
-
-    1. load configuration
-    2. select device
-    3. create tokenizer
-    4. create train/validation DataLoaders
-    5. create model
-    6. print model information
-    7. create Trainer
-    8. train
-    9. evaluate
-    10. save checkpoint
-    11. run a short generation test
-
-Run with:
-
-    python train.py
-"""
-
 import os
 from dataclasses import asdict
 
@@ -74,8 +49,7 @@ def main() -> None:
     total_params = count_parameters(model)
     print_parameter_breakdown(model)
 
-    # Sanity check: generation from the untrained (random) model.
-    # This output is expected to be nonsense.
+   
     print("\nRandom-model sample (before training):")
     print(generate(model, tokenizer, "The little girl", device, config))
 

@@ -1,16 +1,3 @@
-"""
-generate.py
-===========
-
-Autoregressive text generation from a trained checkpoint.
-
-Usage:
-
-    python generate.py --prompt "Once upon a time"
-    python generate.py --prompt "The little girl" --checkpoint checkpoints/modern_mini_llm.pt \\
-        --temperature 0.8 --top-k 40 --max-new-tokens 100
-"""
-
 import argparse
 
 import torch
@@ -31,14 +18,7 @@ def generate(
     device: torch.device,
     config: GPTConfig,
 ) -> str:
-    """
-    Autoregressive generation: repeatedly predict the next token,
-    append it to the context, and repeat.
-
-    NOTE: this recomputes attention over the entire growing context
-    on every step (no KV cache). See the README's roadmap section
-    for future-work notes.
-    """
+    
 
     model.eval()
 
@@ -51,10 +31,10 @@ def generate(
         logits, _ = model(input_for_model)
         next_token_logits = logits[:, -1, :]
 
-        # Temperature: lower = more deterministic, higher = more random.
+        
         next_token_logits = next_token_logits / config.generation_temperature
 
-        # Top-k sampling: only consider the k highest-scoring tokens.
+      
         if config.generation_top_k is not None:
             k = min(config.generation_top_k, next_token_logits.size(-1))
             values, _ = torch.topk(next_token_logits, k)

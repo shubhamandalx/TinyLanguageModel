@@ -1,12 +1,3 @@
-"""
-trainer.py
-==========
-
-The main training engine, wrapped in a small `Trainer` class, plus
-the learning-rate schedule and checkpoint save/load functions used
-by both `train.py` and `generate.py`.
-"""
-
 import math
 import time
 from dataclasses import asdict
@@ -24,18 +15,8 @@ from model import ModernGPT
 from optimizer import Muon, build_optimizers
 
 
-# ====================================================================
-# Learning-rate schedule: linear warmup, then cosine decay
-# ====================================================================
-
-
 def get_lr_multiplier(step: int, warmup_steps: int, max_steps: int) -> float:
-    """
-    Returns a multiplier in [0, 1] to scale the base learning rate:
-
-        step < warmup_steps  -> linear ramp from ~0 to 1
-        otherwise             -> cosine decay from 1 to 0
-    """
+   
 
     if step < warmup_steps:
         return (step + 1) / warmup_steps
@@ -47,10 +28,7 @@ def get_lr_multiplier(step: int, warmup_steps: int, max_steps: int) -> float:
 
 
 def set_learning_rate(optimizer: torch.optim.Optimizer, base_lr: float, multiplier: float) -> float:
-    """
-    Apply `multiplier` to `base_lr` and set it on every parameter
-    group of `optimizer`. Returns the resulting learning rate.
-    """
+    
 
     new_lr = base_lr * multiplier
     for group in optimizer.param_groups:
@@ -59,9 +37,6 @@ def set_learning_rate(optimizer: torch.optim.Optimizer, base_lr: float, multipli
     return new_lr
 
 
-# ====================================================================
-# Checkpointing
-# ====================================================================
 
 
 def save_checkpoint(
@@ -70,13 +45,7 @@ def save_checkpoint(
     tokenizer_name: str,
     path: str,
 ) -> None:
-    """
-    Save model weights + config + tokenizer name to `path`.
-
-    Saving the config and tokenizer name alongside the weights
-    means `load_checkpoint` can reconstruct the exact model
-    architecture without the caller needing to know it in advance.
-    """
+    
 
     cpu_state_dict = {k: v.cpu() for k, v in model.state_dict().items()}
 
@@ -91,11 +60,7 @@ def save_checkpoint(
 
 
 def load_checkpoint(path: str, device: torch.device):
-    """
-    Load a checkpoint produced by `save_checkpoint`.
-
-    Returns: (model, config, tokenizer)
-    """
+   
 
     checkpoint = torch.load(path, map_location=device)
 
@@ -109,23 +74,9 @@ def load_checkpoint(path: str, device: torch.device):
     return model, config, tokenizer
 
 
-# ====================================================================
-# Trainer
-# ====================================================================
-
 
 class Trainer:
-    """
-    Owns the optimizers, the training loop, validation, and
-    checkpoint saving for a `ModernGPT` model.
-
-    Preserves the original training algorithm:
-        - gradient accumulation
-        - mixed-precision FP16 on CUDA
-        - gradient clipping
-        - Muon step for matrix weights + AdamW step for the rest
-        - linear-warmup / cosine-decay learning-rate schedule
-    """
+   
 
     def __init__(
         self,
@@ -153,10 +104,7 @@ class Trainer:
         self.optimizer_step = 0
 
     def train(self) -> ModernGPT:
-        """
-        Run the main pretraining loop for `config.max_steps`
-        optimizer updates.
-        """
+       
 
         config = self.config
 
@@ -181,11 +129,7 @@ class Trainer:
         return self.model
 
     def _run_optimizer_step(self, train_iter):
-        """
-        One full optimizer update: `gradient_accumulation_steps`
-        micro-batches of forward/backward, followed by a single
-        Muon + AdamW step.
-        """
+        
 
         config = self.config
 
@@ -258,10 +202,6 @@ class Trainer:
 
     @torch.no_grad()
     def evaluate(self, max_batches: int = 50) -> float:
-        """
-        Compute average validation language-model loss over at
-        most `max_batches` batches.
-        """
 
         print("\nRunning validation...")
 

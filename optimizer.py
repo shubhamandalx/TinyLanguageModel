@@ -1,17 +1,3 @@
-"""
-optimizer.py
-============
-
-Two optimizers are used together during training:
-
-    Muon  — for 2D matrix weights (attention/MoE projections)
-    AdamW — for everything else (embeddings, norms, biases)
-
-`build_optimizers(model, config)` inspects the model's parameters,
-splits them into the right groups, and returns both optimizer
-instances.
-"""
-
 from typing import List, Tuple
 
 import torch
@@ -21,17 +7,8 @@ from config import GPTConfig
 
 
 class Muon(torch.optim.Optimizer):
-    """
-    Educational implementation of the core idea behind Muon.
 
-    Where AdamW maintains moving averages of gradients and squared
-    gradients, Muon uses momentum followed by an approximate
-    orthogonalization of the update (via Newton-Schulz iteration).
-    It is designed specifically for 2D matrix-shaped parameters.
-
-    NOTE: this is a simplified, educational version. Production
-    Muon implementations contain additional optimizations.
-    """
+    
 
     def __init__(
         self,
@@ -46,10 +23,7 @@ class Muon(torch.optim.Optimizer):
 
     @staticmethod
     def newton_schulz(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-        """
-        Approximate an orthogonalized version of matrix `G` using
-        `steps` Newton-Schulz iterations.
-        """
+        
 
         transposed = False
         if G.shape[0] < G.shape[1]:
@@ -58,7 +32,7 @@ class Muon(torch.optim.Optimizer):
 
         X = G / (G.norm() + 1e-7)
 
-        # Polynomial coefficients from a common Newton-Schulz approximation.
+        
         a, b, c = 3.4445, -4.7750, 2.0315
 
         for _ in range(steps):
@@ -87,8 +61,7 @@ class Muon(torch.optim.Optimizer):
                 if p.grad is None:
                     continue
 
-                # Muon is designed for matrix parameters; skip
-                # anything else as a safety guard.
+                
                 if p.ndim != 2:
                     continue
 
@@ -114,14 +87,7 @@ class Muon(torch.optim.Optimizer):
 def build_optimizers(
     model: nn.Module, config: GPTConfig
 ) -> Tuple[Muon, torch.optim.AdamW]:
-    """
-    Split model parameters between Muon and AdamW, then construct
-    both optimizers.
-
-    Rule of thumb:
-        2D matrix weights (excluding the embedding)  -> Muon
-        embeddings, norms, biases, everything else   -> AdamW
-    """
+    
 
     muon_params: List[torch.nn.Parameter] = []
     adamw_decay_params: List[torch.nn.Parameter] = []
